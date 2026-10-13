@@ -16,3 +16,19 @@ backend/.venv/
 # OS and editor files
 .DS_Store
 Thumbs.db
+# Python environments and caches
+backend/.venv/
+backend/__pycache__/
+**/__pycache__/
+*.py[cod]
+
+# Datasets
+backend/data/*.csv
+
+# Environment secrets
+.env
+.env.*
+!.env.example
+
+# Generated model artifacts (keep local for now)
+backend/models/
