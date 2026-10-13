@@ -54,6 +54,24 @@ class ScheduleRequest(BaseModel):
         }
     )
 
+class StaffingDemandRequest(BaseModel):
+    horizon_days: int = Field(default=7, ge=1, le=30)
+
+    bookings_per_staff_per_day: dict[str, float] = Field(
+        ...,
+        description=(
+            "Assumed daily booking workload per staff member "
+            "for each department."
+        ),
+    )
+
+    available_staff: dict[str, int] = Field(
+        ...,
+        description=(
+            "Number of staff available per department per day."
+        ),
+    )
+
     min_shifts_per_employee: int = Field(default=3, ge=0)
     max_shifts_per_employee: int = Field(default=5, ge=1)
 
@@ -296,6 +314,133 @@ def forecast_ml(request: MLForecastRequest):
             status_code=422,
             detail=str(exc),
         ) from exc
+
+@app.post("/api/staffing-demand")
+def calculate_staffing_demand(
+    request: StaffingDemandRequest,
+):
+    from math import ceil, isfinite
+
+    departments = [
+        "Housekeeping",
+        "Front Desk",
+        "Restaurant",
+        "Kitchen",
+    ]
+
+    # Require workload and availability assumptions
+    # for every department.
+    missing_workload = [
+        dept for dept in departments
+        if dept not in request.bookings_per_staff_per_day
+    ]
+
+    missing_availability = [
+        dept for dept in departments
+        if dept not in request.available_staff
+    ]
+
+    if missing_workload or missing_availability:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "missing_workload_departments": missing_workload,
+                "missing_availability_departments": missing_availability,
+            },
+        )
+
+    # Validate the workload assumptions.
+    for dept in departments:
+        workload = request.bookings_per_staff_per_day[dept]
+        available = request.available_staff[dept]
+
+        if not isfinite(workload) or workload <= 0:
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    f"Workload for {dept} must be a "
+                    "finite number greater than zero."
+                ),
+            )
+
+        if available < 0:
+            raise HTTPException(
+                status_code=422,
+                detail=f"Available staff for {dept} cannot be negative.",
+            )
+
+    # Get predictions from the saved ML model.
+    try:
+        forecast_result = forecast_from_saved_history(
+            request.horizon_days
+        )
+    except FileNotFoundError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail="Trained forecast model is missing.",
+        ) from exc
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=422,
+            detail=str(exc),
+        ) from exc
+
+    daily_results = []
+
+    for forecast_day in forecast_result["forecast"]:
+        predicted_reservations = max(
+            0.0,
+            float(forecast_day["predicted_arrivals"]),
+        )
+
+        department_results = []
+
+        for dept in departments:
+            workload = request.bookings_per_staff_per_day[dept]
+            available = request.available_staff[dept]
+
+            required = ceil(predicted_reservations / workload)
+            gap = available - required
+
+            department_results.append({
+                "department": dept,
+                "required_staff": required,
+                "available_staff": available,
+                "staffing_gap": gap,
+                "shortage": max(0, required - available),
+                "status": (
+                    "Shortage Expected"
+                    if gap < 0
+                    else "Covered"
+                ),
+            })
+
+        daily_results.append({
+            "date": forecast_day["date"],
+            "predicted_booking_records": round(
+                predicted_reservations, 2
+            ),
+            "departments": department_results,
+        })
+
+    return {
+        "model": forecast_result["model"],
+        "training_data_last_date": (
+            forecast_result["training_data_last_date"]
+        ),
+        "forecast": daily_results,
+        "workload_assumptions": (
+            request.bookings_per_staff_per_day
+        ),
+        "available_staff_assumptions": request.available_staff,
+        "note": (
+            "This is a prototype staffing estimate. The public "
+            "dataset contains historical reservation records, "
+            "not live bookings for a specific hotel. Workload "
+            "ratios and staff availability are supplied assumptions "
+            "and must be validated with actual hotel data."
+        ),
+    }
 
 @app.get("/api/forecast-ml")
 def forecast_ml_saved(horizon_days: int = 7):
