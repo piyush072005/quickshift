@@ -1,0 +1,18 @@
+# Node dependencies and build output
+**/node_modules/
+frontend/dist/
+
+# Environment secrets
+.env
+.env.*
+!.env.example
+
+# Python backend
+backend/.venv/
+**/__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# OS and editor files
+.DS_Store
+Thumbs.db

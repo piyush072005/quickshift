@@ -1,0 +1,6 @@
+{
+  "name": "QuickShift - Hotel Workforce AI",
+  "description": "Intelligent hotel workforce management, demand forecasting, automated shift scheduling, and on-demand freelance talent pool.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
