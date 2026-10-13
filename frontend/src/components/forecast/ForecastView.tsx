@@ -1,9 +1,51 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { FORECAST_7_DAYS, SEASONAL_FACTORS } from '../../data/mockData';
+
+const API_BASE_URL =
+  import.meta.env.VITE_API_BASE_URL || 'http://127.0.0.1:8000';
+
+interface ForecastPoint {
+  date: string;
+  predicted_arrivals: number;
+}
+
+interface ForecastMetrics {
+  mae: number;
+  rmse: number;
+  wape_percent: number;
+}
+
+interface MLForecastResponse {
+  model: string;
+  target: string;
+  training_data_last_date: string;
+  forecast: ForecastPoint[];
+  evaluation: {
+    random_forest?: ForecastMetrics;
+    baseline_7_day_average?: ForecastMetrics;
+  };
+  note: string;
+}
 
 interface ForecastViewProps {
   onTriggerToast: (msg: string) => void;
   onNavigateTab: (tab: any) => void;
+}
+
+async function requestMLForecast(
+  horizonDays: number,
+  signal?: AbortSignal
+): Promise<MLForecastResponse> {
+  const response = await fetch(
+    `${API_BASE_URL}/api/forecast-ml?horizon_days=${horizonDays}`,
+    { signal }
+  );
+
+  if (!response.ok) {
+    throw new Error(`Forecast API failed: HTTP ${response.status}`);
+  }
+
+  return (await response.json()) as MLForecastResponse;
 }
 
 export const ForecastView: React.FC<ForecastViewProps> = ({
@@ -15,14 +57,79 @@ export const ForecastView: React.FC<ForecastViewProps> = ({
   const [sortBy, setSortBy] = useState('date');
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [hoveredDay, setHoveredDay] = useState<number | null>(4); // Default to Friday Peak (index 4)
+  const [mlForecast, setMlForecast] =
+  useState<MLForecastResponse | null>(null);
 
-  const handleRefresh = () => {
-    setIsRefreshing(true);
-    setTimeout(() => {
-      setIsRefreshing(false);
-      onTriggerToast('Demand forecast recalibrated with latest booking engine inflow!');
-    }, 600);
-  };
+const [isLoadingML, setIsLoadingML] = useState(false);
+const [mlForecastError, setMLForecastError] =
+  useState<string | null>(null);
+
+const maxPredictedArrivals = mlForecast
+  ? Math.max(
+      1,
+      ...mlForecast.forecast.map(
+        (point) => point.predicted_arrivals
+      )
+    )
+  : 1;
+  useEffect(() => {
+  const controller = new AbortController();
+  const horizonDays = Number(period.replace('d', ''));
+
+  async function loadForecast() {
+    setIsLoadingML(true);
+    setMLForecastError(null);
+
+    try {
+      const result = await requestMLForecast(
+        horizonDays,
+        controller.signal
+      );
+
+      setMlForecast(result);
+    } catch (error) {
+      if (controller.signal.aborted) return;
+
+      setMLForecastError(
+        error instanceof Error
+          ? error.message
+          : 'Unable to load the ML forecast.'
+      );
+    } finally {
+      if (!controller.signal.aborted) {
+        setIsLoadingML(false);
+      }
+    }
+  }
+
+  void loadForecast();
+
+  return () => controller.abort();
+}, [period]);
+
+  const handleRefresh = async () => {
+  const horizonDays = Number(period.replace('d', ''));
+
+  setIsRefreshing(true);
+  setMLForecastError(null);
+
+  try {
+    const result = await requestMLForecast(horizonDays);
+
+    setMlForecast(result);
+    onTriggerToast('Forecast refreshed from the trained ML model.');
+  } catch (error) {
+    const message =
+      error instanceof Error
+        ? error.message
+        : 'Unable to refresh the forecast.';
+
+    setMLForecastError(message);
+    onTriggerToast('Forecast refresh failed. Check the backend.');
+  } finally {
+    setIsRefreshing(false);
+  }
+};
 
   const handleExport = () => {
     onTriggerToast('Exported AI Demand Curve to Forecast_Report_Q2_2025.pdf');
@@ -127,6 +234,138 @@ export const ForecastView: React.FC<ForecastViewProps> = ({
           </div>
         </div>
       </div>
+      {/* Real ML Forecast from the QuickShift API */}
+<div className="w-full bg-white rounded-xl border border-slate-200/90 p-6 shadow-2xs mb-6">
+  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+    <div>
+      <div className="flex items-center gap-2">
+        <h2 className="text-sm font-bold text-slate-900">
+          Trained Model Forecast
+        </h2>
+
+        <span className="px-2 py-0.5 rounded-full bg-teal-50 text-teal-800 border border-teal-100 text-[10px] font-bold">
+          Random Forest
+        </span>
+      </div>
+
+      <p className="text-xs text-slate-500 mt-1">
+        Predicted daily non-cancelled hotel arrivals
+      </p>
+    </div>
+
+    {mlForecast && (
+      <div className="text-xs text-slate-500">
+        Training data through{' '}
+        <span className="font-semibold text-slate-700">
+          {mlForecast.training_data_last_date}
+        </span>
+      </div>
+    )}
+  </div>
+
+  {isLoadingML && (
+    <p className="mt-5 text-sm text-slate-500">
+      Loading predictions from the trained model...
+    </p>
+  )}
+
+  {mlForecastError && (
+    <div
+      role="alert"
+      className="mt-4 rounded-lg border border-rose-200 bg-rose-50 p-3 text-sm text-rose-700"
+    >
+      Could not load forecast: {mlForecastError}
+      <p className="mt-1 text-xs">
+        Confirm that your FastAPI backend is running on port 8000.
+      </p>
+    </div>
+  )}
+
+  {!isLoadingML && !mlForecastError && mlForecast && (
+    <>
+      <div className="mt-5 grid grid-cols-1 sm:grid-cols-2 gap-3">
+        <div className="rounded-xl bg-slate-50 border border-slate-100 p-4">
+          <p className="text-xs text-slate-500">
+            Random Forest Test MAE
+          </p>
+          <p className="text-xl font-bold text-slate-900 mt-1">
+            {mlForecast.evaluation.random_forest?.mae ?? 'N/A'}
+          </p>
+          <p className="text-[10px] text-slate-400 mt-1">
+            Lower is better; measured in arrivals per day
+          </p>
+        </div>
+
+        <div className="rounded-xl bg-slate-50 border border-slate-100 p-4">
+          <p className="text-xs text-slate-500">
+            Test WAPE
+          </p>
+          <p className="text-xl font-bold text-slate-900 mt-1">
+            {mlForecast.evaluation.random_forest?.wape_percent != null
+              ? `${mlForecast.evaluation.random_forest.wape_percent}%`
+              : 'N/A'}
+          </p>
+          <p className="text-[10px] text-slate-400 mt-1">
+            Error relative to total actual arrivals in the test set
+          </p>
+        </div>
+      </div>
+
+      <div className="mt-5">
+        <h3 className="text-xs font-bold text-slate-800 mb-3">
+          Daily Predicted Arrivals
+        </h3>
+
+        <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-3">
+          {mlForecast.forecast.map((point) => (
+            <div
+              key={point.date}
+              className="rounded-xl border border-slate-100 bg-white p-3"
+            >
+              <p className="text-[11px] text-slate-500">
+                {new Date(
+                  `${point.date}T12:00:00`
+                ).toLocaleDateString(undefined, {
+                  month: 'short',
+                  day: 'numeric',
+                })}
+              </p>
+
+              <p className="text-lg font-bold text-slate-900 mt-1">
+                {Math.round(point.predicted_arrivals).toLocaleString()}
+              </p>
+
+              <div className="mt-2 h-1.5 w-full bg-slate-100 rounded-full overflow-hidden">
+                <div
+                  className="h-full bg-teal-600 rounded-full"
+                  style={{
+                    width: `${Math.min(
+                      100,
+                      Math.max(
+                        0,
+                        (point.predicted_arrivals /
+                          maxPredictedArrivals) *
+                          100
+                      )
+                    )}%`,
+                  }}
+                />
+              </div>
+
+              <p className="text-[10px] text-slate-400 mt-1">
+                arrivals/day
+              </p>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      <p className="text-[11px] leading-relaxed text-slate-500 mt-4 border-t border-slate-100 pt-3">
+        {mlForecast.note}
+      </p>
+    </>
+  )}
+</div>
 
       {/* Dominant Multi-Department Curve Chart Card */}
       <div className="w-full bg-white rounded-xl border border-slate-200/90 p-6 shadow-2xs mb-6 relative overflow-hidden">

@@ -2,7 +2,10 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from ortools.sat.python import cp_model
-
+from forecast_model import (
+    forecast_from_history,
+    forecast_from_saved_history,
+)
 
 app = FastAPI(
     title="QuickShift API",
@@ -31,6 +34,13 @@ class ForecastRequest(BaseModel):
     historical_bookings: list[float] = Field(min_length=7)
     horizon_days: int = Field(default=7, ge=1, le=30)
 
+class MLForecastRequest(BaseModel):
+    historical_bookings: list[float] = Field(
+        ..., min_length=28
+    )
+    horizon_days: int = Field(
+        default=7, ge=1, le=30
+    )
 
 class ScheduleRequest(BaseModel):
     employee_names: list[str] = Field(min_length=1)
@@ -267,3 +277,45 @@ def optimize_schedule(request: ScheduleRequest):
         "employee_total_shifts": employee_totals,
         "total_assigned_shifts": total_required,
     }
+@app.post("/api/forecast-ml")
+def forecast_ml(request: MLForecastRequest):
+    try:
+        return forecast_from_history(
+            request.historical_bookings,
+            request.horizon_days,
+        )
+
+    except FileNotFoundError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail="Trained model is missing. Train it first.",
+        ) from exc
+
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=422,
+            detail=str(exc),
+        ) from exc
+
+@app.get("/api/forecast-ml")
+def forecast_ml_saved(horizon_days: int = 7):
+    if not 1 <= horizon_days <= 30:
+        raise HTTPException(
+            status_code=422,
+            detail="horizon_days must be between 1 and 30.",
+        )
+
+    try:
+        return forecast_from_saved_history(horizon_days)
+
+    except FileNotFoundError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail="Trained model is missing. Train it first.",
+        ) from exc
+
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=422,
+            detail=str(exc),
+        ) from exc
