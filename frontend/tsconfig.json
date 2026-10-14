@@ -23,5 +23,14 @@
     },
     "allowImportingTsExtensions": true,
     "noEmit": true
-  }
+  },
+  "exclude": [
+    "node_modules",
+    "dist",
+    "src/components/views/**",
+    "src/data/initialData.ts",
+    "src/components/TopHeader.tsx",
+    "src/components/modals/LocalStorageModal.tsx",
+    "src/components/modals/NewTaskShiftModal.tsx"
+  ]
 }

@@ -3,16 +3,17 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useEffect } from 'react';
-import { NavigationTab, Employee, Shift } from './types';
+import { useState, useEffect } from 'react';
+import type { NavigationTab, Employee, Shift } from './types';
 import { INITIAL_EMPLOYEES } from './data/mockData';
+
 import { Sidebar } from './components/layout/Sidebar';
 import { Header } from './components/layout/Header';
 import { Toast } from './components/ui/Toast';
+
 import { SmartRosterModal } from './components/modals/SmartRosterModal';
 import { GlobalSearchModal } from './components/modals/GlobalSearchModal';
 
-// Views
 import { OverviewView } from './components/dashboard/OverviewView';
 import { StaffRosterView } from './components/roster/StaffRosterView';
 import { ForecastView } from './components/forecast/ForecastView';
@@ -24,6 +25,7 @@ import { SettingsView } from './components/settings/SettingsView';
 export default function App() {
   const [currentTab, setCurrentTab] = useState<NavigationTab>('overview');
   const [employees, setEmployees] = useState<Employee[]>(INITIAL_EMPLOYEES);
+
   const [toastMessage, setToastMessage] = useState<string | null>(null);
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   const [isSearchOpen, setIsSearchOpen] = useState(false);
@@ -33,53 +35,201 @@ export default function App() {
     setToastMessage(msg);
   };
 
-  // Keyboard shortcut listener for Cmd+K / Ctrl+K
+  // Ctrl+K / Cmd+K opens Global Search.
   useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
-        e.preventDefault();
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (
+        (event.metaKey || event.ctrlKey) &&
+        event.key.toLowerCase() === 'k'
+      ) {
+        event.preventDefault();
         setIsSearchOpen(true);
       }
     };
+
     window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
+
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown);
+    };
   }, []);
 
-  // Update specific shift in the roster
-  const handleUpdateShift = (shiftId: string, updates: Partial<Shift>) => {
-    setEmployees(prev =>
-      prev.map(emp => ({
-        ...emp,
-        shifts: emp.shifts.map(s => (s.id === shiftId ? { ...s, ...updates } : s))
+  // Update an existing shift in the roster.
+  const handleUpdateShift = (
+    shiftId: string,
+    updates: Partial<Shift>
+  ) => {
+    setEmployees((previousEmployees) =>
+      previousEmployees.map((employee) => ({
+        ...employee,
+        shifts: employee.shifts.map((shift) =>
+          shift.id === shiftId ? { ...shift, ...updates } : shift
+        ),
       }))
     );
   };
 
-  // Smart Roster execution: auto-fills all vacant shifts
+  // Preserve the existing Smart Roster behaviour:
+  // mark vacant shifts as covered.
   const handleApplySmartRoster = () => {
-    setEmployees(prev =>
-      prev.map(emp => ({
-        ...emp,
-        shifts: emp.shifts.map(s => {
-          if (s.status === 'Vacant') {
-            return {
-              ...s,
-              status: 'Confirmed',
-              role: s.role.includes('Open') ? 'Staffed by Floater' : `${s.role} (Covered)`,
-              shiftLabel: s.shiftLabel === 'Open Shift' ? 'Covered' : s.shiftLabel,
-              staffNeeded: 0,
-            };
+    let coveredCount = 0;
+
+    setEmployees((previousEmployees) =>
+      previousEmployees.map((employee) => ({
+        ...employee,
+        shifts: employee.shifts.map((shift) => {
+          if (shift.status !== 'Vacant') {
+            return shift;
           }
-          return s;
-        })
+
+          coveredCount += 1;
+
+          return {
+            ...shift,
+            status: 'Confirmed' as const,
+            role: shift.role.includes('Open')
+              ? 'Staffed by Floater'
+              : `${shift.role} (Covered)`,
+            shiftLabel:
+              shift.shiftLabel === 'Open Shift'
+                ? 'Covered'
+                : shift.shiftLabel,
+            staffNeeded: 0,
+          };
+        }),
       }))
     );
-    showToast('AI Smart Roster generated! 5 open vacancies covered via Talent Pool floaters.');
+
+    showToast(
+      `Smart Roster generated. ${coveredCount} vacant shift(s) marked as covered.`
+    );
+  };
+
+  // Convert a time range such as "12:00 - 20:00" into a duration label.
+  const getDurationLabel = (timeRange: string): string => {
+    const match = timeRange.match(
+      /(\d{1,2}):(\d{2})\s*-\s*(\d{1,2}):(\d{2})/
+    );
+
+    if (!match) {
+      return '8h';
+    }
+
+    const startHour = Number(match[1]);
+    const startMinute = Number(match[2]);
+    const endHour = Number(match[3]);
+    const endMinute = Number(match[4]);
+
+    const startMinutes = startHour * 60 + startMinute;
+    let endMinutes = endHour * 60 + endMinute;
+
+    // Support shifts that cross midnight.
+    if (endMinutes <= startMinutes) {
+      endMinutes += 24 * 60;
+    }
+
+    const durationMinutes = endMinutes - startMinutes;
+    const hours = Math.floor(durationMinutes / 60);
+    const minutes = durationMinutes % 60;
+
+    return minutes === 0 ? `${hours}h` : `${hours}h ${minutes}m`;
+  };
+
+  // Called when an employee accepts an offer in the WhatsApp Simulator.
+  // Only updates the selected employee's selected day.
+  const handleWhatsAppShiftAccepted = (
+    employeeName: string,
+    role: string,
+    department: string,
+    dayIndex: number,
+    timeRange: string,
+    shiftLabel: string
+  ): boolean => {
+    const employee = employees.find(
+      (item) => item.name === employeeName
+    );
+
+    const targetShift = employee?.shifts.find(
+      (shift) => shift.dayIndex === dayIndex
+    );
+
+    if (!employee || !targetShift) {
+      showToast(
+        'Employee or roster date was not found. No changes were made.'
+      );
+      return false;
+    }
+
+    // Rest days generated by the optimizer can be reassigned.
+    const isOptimizerRestDay =
+      targetShift.status === 'Unavailability' &&
+      targetShift.role === 'Rest day' &&
+      targetShift.shiftLabel === 'OFF';
+
+    // Never overwrite genuine leave or protected unavailability.
+    const isProtectedStatus =
+      targetShift.status === 'Leave' ||
+      targetShift.status === 'Sick Leave' ||
+      targetShift.status === 'Vacation';
+
+    if (
+      isProtectedStatus ||
+      (targetShift.status === 'Unavailability' && !isOptimizerRestDay)
+    ) {
+      showToast(
+        `${employeeName} is unavailable on the selected date.`
+      );
+      return false;
+    }
+
+    // Offers can only fill a vacant shift or an optimizer-generated rest day.
+    if (targetShift.status !== 'Vacant' && !isOptimizerRestDay) {
+      showToast(
+        `${employeeName} already has a roster entry on this date. Select an available roster slot.`
+      );
+      return false;
+    }
+
+    const duration = getDurationLabel(timeRange);
+
+    setEmployees((previousEmployees) =>
+      previousEmployees.map((currentEmployee) => {
+        if (currentEmployee.name !== employeeName) {
+          return currentEmployee;
+        }
+
+        return {
+          ...currentEmployee,
+          shifts: currentEmployee.shifts.map((shift) => {
+            if (shift.dayIndex !== dayIndex) {
+              return shift;
+            }
+
+            return {
+              ...shift,
+              status: 'Confirmed' as const,
+              role,
+              department,
+              shiftLabel,
+              timeRange,
+              duration,
+              staffNeeded: 0,
+            };
+          }),
+        };
+      })
+    );
+
+    showToast(
+      `${employeeName} accepted the offer. The roster was updated.`
+    );
+
+    return true;
   };
 
   return (
-    <div className="flex h-screen bg-[#f8f9ff] text-[#0b1c30] overflow-hidden antialiased">
-      {/* Persistent Left Sidebar */}
+    <div className="flex h-screen overflow-hidden bg-[#f8f9ff] text-[#0b1c30] antialiased">
+      {/* Persistent sidebar */}
       <Sidebar
         currentTab={currentTab}
         onSelectTab={setCurrentTab}
@@ -87,17 +237,17 @@ export default function App() {
         onCloseMobile={() => setIsMobileMenuOpen(false)}
       />
 
-      {/* Main Area */}
-      <div className="flex-1 flex flex-col min-w-0 lg:pl-72 overflow-hidden">
-        {/* Top Header */}
+      {/* Main application area */}
+      <div className="flex min-w-0 flex-1 flex-col overflow-hidden lg:pl-72">
+        {/* Header */}
         <Header
           onOpenMobileMenu={() => setIsMobileMenuOpen(true)}
           onOpenSearch={() => setIsSearchOpen(true)}
           onTriggerToast={showToast}
         />
 
-        {/* Scrollable Viewport */}
-        <main className="flex-1 overflow-y-auto pt-20 px-4 sm:px-6 lg:px-8">
+        {/* Active page */}
+        <main className="flex-1 overflow-y-auto px-4 pt-20 sm:px-6 lg:px-8">
           {currentTab === 'overview' && (
             <OverviewView
               onNavigateTab={setCurrentTab}
@@ -118,6 +268,7 @@ export default function App() {
 
           {currentTab === 'ai-forecast' && (
             <ForecastView
+              employees={employees}
               onTriggerToast={showToast}
               onNavigateTab={setCurrentTab}
             />
@@ -131,32 +282,9 @@ export default function App() {
 
           {currentTab === 'whatsapp-simulator' && (
             <WhatsAppSimulatorView
+              employees={employees}
               onTriggerToast={showToast}
-              onAutoAddShiftToRoster={(empName, role, dept) => {
-                setEmployees(prev =>
-                  prev.map(emp => {
-                    if (emp.name === empName) {
-                      return {
-                        ...emp,
-                        shifts: emp.shifts.map((s, idx) => {
-                          if (idx === 5) { // Saturday
-                            return {
-                              ...s,
-                              status: 'Confirmed',
-                              role: role,
-                              department: dept,
-                              shiftLabel: 'Evening',
-                              timeRange: '12:00 - 20:00',
-                            };
-                          }
-                          return s;
-                        })
-                      };
-                    }
-                    return emp;
-                  })
-                );
-              }}
+              onAutoAddShiftToRoster={handleWhatsAppShiftAccepted}
             />
           )}
 
@@ -174,14 +302,15 @@ export default function App() {
         </main>
       </div>
 
-      {/* Smart Roster Generation Modal */}
+      {/* Smart Roster modal */}
       <SmartRosterModal
         isOpen={isSmartRosterOpen}
         onClose={() => setIsSmartRosterOpen(false)}
+        employees={employees}
         onApplyRoster={handleApplySmartRoster}
       />
 
-      {/* Command+K Global Search Modal */}
+      {/* Global Search modal */}
       <GlobalSearchModal
         isOpen={isSearchOpen}
         onClose={() => setIsSearchOpen(false)}
@@ -189,7 +318,7 @@ export default function App() {
         onTriggerToast={showToast}
       />
 
-      {/* Floating Feedback Toast Notification */}
+      {/* Toast notifications */}
       <Toast
         message={toastMessage}
         onClose={() => setToastMessage(null)}
