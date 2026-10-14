@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { API_BASE_URL } from '../../lib/api';
 
 interface HeaderProps {
   onOpenMobileMenu: () => void;
@@ -144,7 +145,7 @@ export const Header: React.FC<HeaderProps> = ({
               </button>
               <div className="px-3 py-1.5 text-[10px] text-slate-400 bg-slate-50 border-t border-slate-100 flex items-center gap-1.5">
                 <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
-                <span>API: http://127.0.0.1:8000</span>
+                <span>API: {API_BASE_URL}</span>
               </div>
             </div>
           )}

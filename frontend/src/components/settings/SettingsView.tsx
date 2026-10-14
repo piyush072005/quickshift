@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { API_BASE_URL } from '../../lib/api';
 
 interface SettingsViewProps {
   onTriggerToast: (msg: string) => void;
@@ -506,7 +507,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ onTriggerToast }) =>
               <input
                 type="text"
                 readOnly
-                value="http://127.0.0.1:8000"
+                value={API_BASE_URL}
                 className="w-full text-xs rounded-lg border border-slate-200 bg-slate-50 py-2 px-3 text-slate-700 font-mono outline-none"
               />
               <p className="text-[11px] text-slate-400 mt-1.5">
